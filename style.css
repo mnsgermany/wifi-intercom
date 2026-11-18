@@ -34,7 +34,8 @@ input, select { width: 100%; min-height: 48px; padding: 0 12px; border-radius: v
 .dot { width: 14px; height: 14px; border-radius: 50%; background: var(--on-air); box-shadow: 0 0 18px var(--on-air); }
 .sub { color: var(--muted); margin: 6px 0 22px; }
 .hint { color: var(--muted); font-size: 14px; margin: 10px 0 0; }
-.err { color: var(--on-air); font-weight: 600; min-height: 1.2em; }
+.err { color: var(--warn); font-weight: 600; min-height: 1.2em; white-space: pre-line; }
+#answerState { white-space: pre-line; }
 .field { display: block; margin: 12px 0 0; color: var(--muted); font-size: 14px; }
 .field > input, .field > select { margin-top: 6px; color: var(--text); font-size: 16px; }
 .check { display: flex; gap: 10px; align-items: center; margin: 14px 0 0; }

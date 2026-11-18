@@ -1,13 +1,26 @@
 // Сетка WebRTC: каждый с каждым напрямую по Wi-Fi. Канал данных 'ctl' + один аудио-трансивер.
 // Первое рукопожатие идёт через boot (брокер, QR или хаб), дальнейшие — по самому каналу данных.
 (function (root) {
-  // Только локальные кандидаты: STUN/TURN не нужны в одной сети и не работают без интернета.
-  const RTC = { iceServers: [] };
+  // Без интернета — только локальные адреса. С интернетом добавляем бесплатный STUN: если телефоны прячут
+  // свои адреса за *.local и сеть не пропускает их поиск, остаётся путь через внешний адрес роутера.
+  const STUN = [{ urls: 'stun:stun.l.google.com:19302' }];
+
+  /** Адреса из SDP для диагностики: «192.168.1.5 · abc.local · 85.1.2.3 (внешний)». */
+  function addrs(sdp) {
+    const out = new Set();
+    for (const l of String(sdp || '').split(/\r?\n/)) {
+      if (!l.startsWith('a=candidate:')) continue;
+      const f = l.split(' ');
+      if (f[2].toLowerCase() !== 'udp') continue;
+      out.add(f[4] + (f[7] === 'srflx' ? ' (внешний)' : ''));
+    }
+    return [...out].join(' · ') || 'нет адресов';
+  }
 
   function gathered(pc) {
     if (pc.iceGatheringState === 'complete') return Promise.resolve();
     return new Promise((ok) => {
-      const t = setTimeout(ok, 2500);
+      const t = setTimeout(ok, 5000);
       pc.addEventListener('icegatheringstatechange', () => {
         if (pc.iceGatheringState === 'complete') { clearTimeout(t); ok(); }
       });
@@ -15,12 +28,13 @@
   }
 
   class Peer {
-    constructor(id, { initiator, boot, onMsg, onTrack, onOpen, onClose }) {
-      Object.assign(this, { id, initiator, polite: !initiator, boot, onMsg, onTrack, onOpen, onClose });
+    constructor(id, { initiator, boot, onMsg, onTrack, onOpen, onClose, onState, online }) {
+      Object.assign(this, { id, initiator, polite: !initiator, boot, onMsg, onTrack, onOpen, onClose, onState });
       this.making = false;
       this.closed = false;
       this.track = null; // что сейчас отдаём этому собеседнику (микрофон или null)
-      const pc = this.pc = new RTCPeerConnection(RTC);
+      const pc = this.pc = new RTCPeerConnection({ iceServers: online ? STUN : [] });
+      pc.oniceconnectionstatechange = () => onState?.(this, pc.iceConnectionState);
       this.dc = pc.createDataChannel('ctl', { negotiated: true, id: 0 });
       this.dc.onopen = () => {
         if (initiator && !this.tx) {
@@ -177,5 +191,5 @@
     end(reason) { this.all({ t: 'end', reason }); }
   }
 
-  root.WFI_NET = { Peer, Hub, COLORS };
+  root.WFI_NET = { Peer, Hub, COLORS, addrs };
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -1,9 +1,10 @@
 // Wi-Fi Intercom: экраны, хаб/участник, PTT/VAD, каналы, текст, чат, вызов, пробная сессия.
 (function () {
-  const { Peer, Hub, COLORS } = window.WFI_NET;
+  const { Peer, Hub, COLORS, addrs } = window.WFI_NET;
   const BOOT = window.WFI_BOOT, AUDIO = window.WFI_AUDIO, STT = window.WFI_STT, LIC = window.WFI_LICENSE;
   const $ = (id) => document.getElementById(id);
   const DEFAULT_CH = ['Общий', 'Звук', 'Свет', 'Сцена', 'Режиссёр'];
+  const VER = '1.0.3'; // = VERSION в sw.js
   const ALL = '*';
   const EMOJI = '👍👌🙏✅❌⚠️🔥⏱️🎤🎧🔊🔇💡🎬📢🚪😀😂😅😎🤔😬🙄😴❤️👏🤝✋👀💪☕🍕🚀'.match(/\p{Extended_Pictographic}️?/gu);
   const rid = () => [...crypto.getRandomValues(new Uint8Array(5))].map((b) => b.toString(16).padStart(2, '0')).join('');
@@ -127,9 +128,33 @@
     else S.peers.get(S.hostId)?.send(m);
   }
 
+  // ---------- диагностика связи: видно, на каком шаге застряло ----------
+  const ICE_RU = { new: 'жду ответа', checking: 'ищу путь между телефонами…', connected: 'есть ✓', completed: 'есть ✓',
+    failed: 'не удалось', disconnected: 'обрыв, пробую снова…', closed: 'закрыто' };
+  function step(text) {
+    const t = new Date().toLocaleTimeString('ru-RU');
+    const box = S.join?.kind === 'off' ? $('answerState') : $('startErr');
+    box.textContent = text;
+    (S.log = S.log || []).push(t + ' ' + text);
+  }
+  function addrInfo(p) {
+    return `мои адреса: ${addrs(p.pc.localDescription?.sdp)}; у собеседника: ${addrs(p.pc.remoteDescription?.sdp)}`;
+  }
+  const FAIL_TIP = 'Телефоны не видят друг друга в этой сети. Проверь, что все в ОДНОЙ Wi-Fi (не гостевой — там часто «изоляция клиентов»), или подключи всех к раздаче с телефона хаба.';
+
+  function onState(p, st) {
+    if (S.entered && st !== 'failed') return;
+    if (!S.host && p.id === S.hostId) {
+      step(`Связь с хабом: ${ICE_RU[st] || st}. ${addrInfo(p)}` + (st === 'failed' ? '\n' + FAIL_TIP : ''));
+    } else if (S.host) {
+      const who = S.roster.find((m) => m.id === p.id)?.name || 'Новый участник';
+      banner(`${who}: связь ${ICE_RU[st] || st}` + (st === 'failed' ? `. ${addrInfo(p)}. ${FAIL_TIP}` : ''), st === 'failed');
+    }
+  }
+
   function peerOpts(id, initiator, boot) {
     return {
-      initiator, boot,
+      initiator, boot, onState, online: !!S.online,
       onTrack: playRemote,
       onMsg: (m, p) => { if (S.host) S.hub.onMessage(p.id, m); else if (p.id === S.hostId) onHub(m); },
       onOpen: (p) => {
@@ -213,7 +238,7 @@
   async function createSession() {
     if (!readProfile()) return;
     try { await startMic(); } catch (e) { return err('Нет доступа к микрофону: ' + e.message); }
-    S.host = true; S.hostId = S.id;
+    S.host = true; S.hostId = S.id; S.online = true;
     S.licEmail = await LIC.licensed();
     S.trialEnd = S.licEmail ? null : Date.now() + LIC.TRIAL * 1000;
     S.hub = new Hub({ hostId: S.id, channels: DEFAULT_CH, trialEnd: S.trialEnd });
@@ -228,6 +253,7 @@
 
   async function setHostMode(mode) {
     S.hostMode = mode;
+    S.online = mode === 'on';
     $('modeOn').classList.toggle('on', mode === 'on');
     $('modeOff').classList.toggle('on', mode === 'off');
     $('scanAnsBtn').hidden = mode !== 'on' ? false : true;
@@ -300,6 +326,7 @@
     p.id = a.pid;
     S.peers.set(a.pid, p);
     S.pending = null;
+    banner('Ответ принят — соединяю телефоны…', true);
     await p.signal(a.d);
     newPending();
   }
@@ -321,24 +348,33 @@
     try { await startMic(); } catch (e) { return err('Нет доступа к микрофону: ' + e.message); }
     const j = S.join;
     S.hostId = String(j.h);
+    S.online = j.kind === 'on';
     history.replaceState(null, '', base());
     if (j.kind === 'on') {
       try {
         S.room = await BOOT.room(j.k);
+        step('Шаг 1/3: выхожу в интернет к хабу…');
         S.mq = await BOOT.connect(async (topic, payload) => {
           if (topic !== S.room.base + '/' + S.id) return;
-          try { const m = await S.room.open(payload); S.peers.get(S.hostId)?.signal(m.desc); } catch { /* чужое */ }
+          try {
+            const m = await S.room.open(payload);
+            step('Шаг 3/3: хаб ответил, соединяю телефоны…');
+            S.peers.get(S.hostId)?.signal(m.desc);
+          } catch { /* чужое */ }
         });
         S.mq.sub(S.room.base + '/' + S.id);
       } catch { return err('Нет интернета. Попроси хаб переключиться на «Без интернета».'); }
-      const p = new Peer(S.hostId, peerOpts(S.hostId, true, async (desc) => S.mq?.pub(S.room.base + '/h', await S.room.seal({ pid: S.id, desc }))));
+      const p = new Peer(S.hostId, peerOpts(S.hostId, true, async (desc) => {
+        S.mq?.pub(S.room.base + '/h', await S.room.seal({ pid: S.id, desc }));
+        step('Шаг 2/3: запрос отправлен, жду ответ хаба… (у хаба должен быть открыт QR «Есть интернет» и интернет)');
+      }));
       S.peers.set(S.hostId, p);
-      err('Подключаюсь…');
-      setTimeout(() => { if (!S.entered) err('Не удаётся связаться с хабом. Проверь, что вы в одной Wi-Fi сети.'); }, 15000);
+      setTimeout(() => { if (!S.entered) step($('startErr').textContent + '\n\nДолго нет связи. ' + FAIL_TIP); }, 25000);
     } else {
       const p = new Peer(S.hostId, peerOpts(S.hostId, false, async (desc) => {
         drawQr($('answerQr'), 'WFIA:' + (await BOOT.pack({ pid: S.id, d: BOOT.slim(desc) })));
         show('answer');
+        step(`Жду, пока хаб отсканирует… (${addrInfo(p)})`);
       }));
       S.peers.set(S.hostId, p);
       p.signal(j.d);
@@ -678,6 +714,7 @@
   $('againBtn').onclick = () => location.replace(base());
 
   // ---------- старт ----------
+  $('ver').textContent = 'Версия ' + VER;
   $('name').value = prefs.name;
   $('role').value = prefs.role;
   $('createBtn').onclick = createSession;
