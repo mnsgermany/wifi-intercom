@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0d12">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Wi-Fi Intercom</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- Старт -->
+<section id="start" class="screen">
+  <div class="brand"><span class="dot"></span> Wi-Fi Intercom</div>
+  <p class="sub" id="startSub">Интерком для площадки. Связь по Wi-Fi напрямую между телефонами.</p>
+  <label class="field">Имя<input id="name" maxlength="24" autocomplete="nickname" placeholder="Например, Макс"></label>
+  <label class="field">Роль
+    <select id="role">
+      <option>Режиссёр</option><option>Звук</option><option>Свет</option><option>Видео</option>
+      <option>Сцена</option><option>Ведущий</option><option>Другое</option>
+    </select>
+  </label>
+  <button id="joinBtn" class="big primary" hidden>Войти в сессию</button>
+  <button id="createBtn" class="big primary">Создать сессию (я — хаб)</button>
+  <button id="scanJoinBtn" class="big">Войти по QR</button>
+  <p class="err" id="startErr" role="alert"></p>
+  <p class="hint">Все телефоны должны быть в одной Wi-Fi сети: общий роутер или раздача с телефона.</p>
+</section>
+
+<!-- Офлайн-вход: ответный QR для хаба -->
+<section id="answer" class="screen" hidden>
+  <div class="brand"><span class="dot"></span> Почти готово</div>
+  <p class="sub">Покажи этот QR хабу: он нажмёт «Сканировать ответ».</p>
+  <canvas id="answerQr" class="qr" aria-label="Ответный QR-код"></canvas>
+  <p class="hint" id="answerState">Жду, пока хаб отсканирует…</p>
+</section>
+
+<!-- Эфир -->
+<section id="main" class="screen" hidden>
+  <header class="top">
+    <span id="statusPill" class="pill">Эфир</span>
+    <span id="trial" class="pill warn" hidden></span>
+    <span class="grow"></span>
+    <button id="textBtn" class="icon" aria-pressed="true" title="Показывать текст">Аа</button>
+    <button id="peopleBtn" class="icon" title="Участники"><span id="peopleN">1</span>👥</button>
+    <button id="hostBtn" class="icon" title="Хаб: QR и каналы" hidden>QR</button>
+    <button id="setBtn" class="icon" title="Настройки">⚙︎</button>
+  </header>
+
+  <div id="banner" class="banner" hidden></div>
+
+  <div id="tx" class="tx" aria-live="polite"></div>
+
+  <div class="chans">
+    <div class="row"><span class="lbl">Слушаю</span><div id="listen" class="chips"></div></div>
+    <div class="row"><span class="lbl">Говорю в</span><select id="talkCh"></select>
+      <button id="callBtn" class="call">ВЫЗОВ</button></div>
+  </div>
+
+  <div class="pttWrap">
+    <button id="ptt" class="ptt" aria-label="Нажми и держи, чтобы говорить">
+      <span class="ring" id="ring"></span>
+      <span id="pttTxt">ДЕРЖИ<br>И ГОВОРИ</span>
+    </button>
+  </div>
+
+  <div id="chat" class="chat">
+    <button id="chatHandle" class="handle" aria-expanded="false">💬 Чат <span id="unread" class="badge" hidden>0</span></button>
+    <div class="chatBody">
+      <div id="msgs" class="msgs"></div>
+      <div id="emojis" class="emojis" hidden></div>
+      <form id="chatForm" class="chatForm">
+        <button type="button" id="emojiBtn" class="icon" aria-label="Смайлы">🙂</button>
+        <input id="chatIn" maxlength="500" autocomplete="off" placeholder="Сообщение">
+        <button class="primary">➤</button>
+      </form>
+    </div>
+  </div>
+  <div id="remote" hidden></div>
+</section>
+
+<div id="flash" class="flash" hidden><div id="flashTxt"></div></div>
+
+<!-- Хаб -->
+<dialog id="hostDlg">
+  <h2>Подключение</h2>
+  <div class="seg">
+    <button id="modeOn" class="on">Есть интернет</button>
+    <button id="modeOff">Без интернета</button>
+  </div>
+  <canvas id="joinQr" class="qr" aria-label="QR для входа"></canvas>
+  <p class="hint" id="joinHint"></p>
+  <button id="scanAnsBtn" class="big primary" hidden>Сканировать ответ</button>
+  <button id="copyBtn" class="big">Скопировать ссылку</button>
+  <h3>Каналы</h3>
+  <div id="chEdit"></div>
+  <button id="chAdd" class="big">+ Канал</button>
+  <h3>Лицензия</h3>
+  <div id="licBox"></div>
+  <button class="big" data-close>Закрыть</button>
+</dialog>
+
+<dialog id="peopleDlg">
+  <h2>Участники</h2>
+  <div id="people"></div>
+  <button class="big" data-close>Закрыть</button>
+</dialog>
+
+<dialog id="setDlg">
+  <h2>Настройки</h2>
+  <div class="seg">
+    <button id="mPtt">Кнопка (PTT)</button>
+    <button id="mVad">По голосу</button>
+  </div>
+  <label class="field">Шумодав
+    <select id="ns">
+      <option value="rnnoise">RNNoise — толпа, гул (рекомендую)</option>
+      <option value="builtin">Встроенный в телефон</option>
+      <option value="off">Выключен (гарнитура)</option>
+    </select>
+  </label>
+  <label class="check"><input type="checkbox" id="band"> Только голосовая полоса (150–4000 Гц)</label>
+  <label class="field">Порог гейта: <b id="gateV"></b>
+    <input type="range" id="gate" min="-80" max="-20" step="1">
+    <span class="meter"><span id="lvl"></span><span id="gateMark"></span></span>
+  </label>
+  <label class="check"><input type="checkbox" id="sttOn"> Расшифровывать мой голос в текст</label>
+  <label class="field">Громкость<input type="range" id="vol" min="0" max="1" step="0.05"></label>
+  <button id="testBtn" class="big">Послушать себя (3 сек)</button>
+  <p class="hint" id="setHint"></p>
+  <button class="big" data-close>Закрыть</button>
+</dialog>
+
+<dialog id="scanDlg">
+  <h2 id="scanTitle">Наведи камеру на QR</h2>
+  <video id="cam" playsinline muted></video>
+  <button class="big" data-close>Отмена</button>
+</dialog>
+
+<dialog id="endDlg">
+  <h2 id="endTitle">Сессия закончилась</h2>
+  <p id="endTxt"></p>
+  <div id="endLic"></div>
+  <button class="big primary" id="againBtn">На старт</button>
+</dialog>
+
+<script src="vendor/qrcode.js"></script>
+<script src="vendor/jsQR.js"></script>
+<script src="js/boot.js"></script>
+<script src="js/net.js"></script>
+<script src="js/audio.js"></script>
+<script src="js/stt.js"></script>
+<script src="js/license.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
