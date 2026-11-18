@@ -108,6 +108,9 @@ try {
   await host.waitForSelector('#endDlg[open]', { timeout: 5000 });
   console.log('пробные 5 минут: сессия закрывается у всех — ок');
   console.log('E2E OK');
+} catch (e) {
+  console.error('E2E FAIL:', e.message);
+  process.exitCode = 1;
 } finally {
   // Chrome с живыми WebRTC-соединениями иногда долго закрывается — не ждём его дольше 5 с
   await Promise.race([browser.close(), new Promise((ok) => setTimeout(ok, 5000))]);

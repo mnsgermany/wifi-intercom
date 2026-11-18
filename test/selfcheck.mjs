@@ -56,16 +56,16 @@ assert.equal(await LIC.valid(email, riderKey), false, 'ключи других �
 
 // живой брокер: два клиента, сообщение доходит
 if (process.argv.includes('--net')) {
+  // хаб слушает все брокеры, входящий берёт самый быстрый — сообщение всё равно доходит
   let got;
-  const a = await BOOT.connect((t, p) => { got = [t, p]; });
-  const b = await BOOT.connect(() => {}, a.broker);
   const topic = r1.base + '/selftest';
-  a.sub(topic);
-  await new Promise((ok) => setTimeout(ok, 800));
+  const hubs = await BOOT.connectAll((t, p) => { got = [t, p]; }, (c) => c.sub(topic));
+  await new Promise((ok) => setTimeout(ok, 9000)); // дать досоединиться остальным
+  const b = await BOOT.connect(() => {});
   b.pub(topic, sealed);
   for (let i = 0; i < 40 && !got; i++) await new Promise((ok) => setTimeout(ok, 100));
   assert.deepEqual(got, [topic, sealed]);
-  console.log('брокер', BOOT.BROKERS[a.broker], 'ok');
-  a.close(); b.close();
+  console.log('хаб на', hubs.map((c) => BOOT.BROKERS[c.broker]).join(', '), '; входящий на', BOOT.BROKERS[b.broker], '— ok');
+  hubs.forEach((c) => c.close()); b.close();
 }
 console.log('selfcheck ok');

@@ -234,12 +234,11 @@
     $('joinHint').textContent = 'Готовлю QR…';
     if (mode === 'on') {
       try {
-        if (!S.mq) {
+        if (!S.mqs) {
           const k = BOOT.b64u(crypto.getRandomValues(new Uint8Array(16)));
           S.room = await BOOT.room(k);
-          S.mq = await BOOT.connect(onHostPublish);
-          S.mq.sub(S.room.base + '/h');
-          S.onlineUrl = base() + '#j=' + (await BOOT.pack({ k, b: S.mq.broker, h: S.id }));
+          S.mqs = await BOOT.connectAll(onHostPublish, (c) => c.sub(S.room.base + '/h'));
+          S.onlineUrl = base() + '#j=' + (await BOOT.pack({ k, h: S.id }));
         }
         if (S.hostMode !== 'on') return; // пока ждали брокер, переключили на «без интернета»
         S.joinUrl = S.onlineUrl;
@@ -264,7 +263,7 @@
     $('joinHint').textContent = '1) Входящий наводит камеру на этот QR. 2) Он покажет свой QR — нажми «Сканировать ответ».';
   }
 
-  async function onHostPublish(topic, payload) {
+  async function onHostPublish(topic, payload, client) {
     if (topic !== S.room.base + '/h') return;
     let msg; try { msg = await S.room.open(payload); } catch { return; } // чужое или битое
     const pid = String(msg.pid || '');
@@ -272,7 +271,7 @@
     let p = S.peers.get(pid);
     if (!p) {
       if (S.over) return;
-      p = new Peer(pid, peerOpts(pid, false, async (desc) => S.mq?.pub(S.room.base + '/' + pid, await S.room.seal({ desc }))));
+      p = new Peer(pid, peerOpts(pid, false, async (desc) => client.pub(S.room.base + '/' + pid, await S.room.seal({ desc }))));
       S.peers.set(pid, p);
     }
     p.signal(msg.desc);
@@ -329,7 +328,7 @@
         S.mq = await BOOT.connect(async (topic, payload) => {
           if (topic !== S.room.base + '/' + S.id) return;
           try { const m = await S.room.open(payload); S.peers.get(S.hostId)?.signal(m.desc); } catch { /* чужое */ }
-        }, j.b);
+        });
         S.mq.sub(S.room.base + '/' + S.id);
       } catch { return err('Нет интернета. Попроси хаб переключиться на «Без интернета».'); }
       const p = new Peer(S.hostId, peerOpts(S.hostId, true, async (desc) => S.mq?.pub(S.room.base + '/h', await S.room.seal({ pid: S.id, desc }))));
@@ -667,7 +666,7 @@
     if (S.over) return;
     S.over = true;
     setTalking(false);
-    setTimeout(() => { for (const p of S.peers.values()) p.close(); S.pending?.close(); S.mq?.close(); S.mic?.stop(); }, 300);
+    setTimeout(() => { for (const p of S.peers.values()) p.close(); S.pending?.close(); S.mq?.close(); S.mqs?.forEach((c) => c.close()); S.mic?.stop(); }, 300);
     $('endTitle').textContent = reason === 'trial' ? 'Пробные 5 минут закончились' : 'Сессия закончилась';
     $('endTxt').textContent = reason === 'trial'
       ? (S.host ? 'Чтобы говорить без ограничений, активируй хаб. Можно начать новую пробную сессию.' : 'Хаб работает в пробном режиме. Попроси его активировать ключ или начни заново.')

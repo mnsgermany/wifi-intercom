@@ -96,16 +96,34 @@
     };
   }
 
-  /** Подключиться к самому быстрому живому брокеру (или к указанному). Возвращает {broker, sub, pub, close}. */
-  async function connect(onPublish, only) {
-    const list = only != null ? [only] : BROKERS.map((_, i) => i);
+  /** Входящий: самый быстрый живой брокер. Возвращает {broker, sub, pub, close}. */
+  async function connect(onPublish) {
     let winner = null;
-    const tries = list.map((i) => mqtt(BROKERS[i], (t, p) => winner?.broker === i && onPublish(t, p)).then((c) => {
+    const tries = BROKERS.map((url, i) => mqtt(url, (t, p) => winner?.broker === i && onPublish(t, p)).then((c) => {
       if (winner) { c.close(); throw new Error('late'); } // опоздавшие закрываем
       return (winner = Object.assign(c, { broker: i }));
     }));
     try { return await Promise.any(tries); } catch { throw new Error('Нет связи с брокером'); }
   }
 
-  root.WFI_BOOT = { connect, room, pack, unpack, slim, b64u, BROKERS };
+  /**
+   * Хаб: слушает все брокеры, до которых дотянулся, — входящий может попасть на любой.
+   * onPublish(topic, payload, client) — отвечать через тот же client. onEach(client) — для каждого подключения.
+   * Промис — когда подключился первый; остальные досоединяются сами.
+   */
+  function connectAll(onPublish, onEach) {
+    const all = [];
+    const tries = BROKERS.map((url, i) => {
+      let c = null;
+      return mqtt(url, (t, p) => c && onPublish(t, p, c)).then((x) => {
+        c = Object.assign(x, { broker: i });
+        all.push(c);
+        onEach(c);
+        return all;
+      });
+    });
+    return Promise.any(tries).catch(() => { throw new Error('Нет связи с брокером'); });
+  }
+
+  root.WFI_BOOT = { connect, connectAll, room, pack, unpack, slim, b64u, BROKERS };
 })(typeof window !== 'undefined' ? window : globalThis);
