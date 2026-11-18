@@ -44,7 +44,7 @@
       ws.binaryType = 'arraybuffer';
       let buf = new Uint8Array(0), ping, done = false;
       const fail = (e) => { if (!done) { done = true; reject(e); } };
-      const t = setTimeout(() => { fail(new Error('timeout')); ws.close(); }, 8000);
+      const t = setTimeout(() => { fail(new Error('timeout')); ws.close(); }, 15000);
       ws.onerror = () => fail(new Error('ws'));
       ws.onclose = () => { clearInterval(ping); fail(new Error('closed')); };
       ws.onopen = () => ws.send(packet(0x10, [...str('MQTT'), 4, 2, 0, 30, ...str('wfi' + Math.random().toString(36).slice(2, 12))]));

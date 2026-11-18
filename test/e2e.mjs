@@ -27,8 +27,10 @@ try {
   await host.goto(URL0);
   await host.fill('#name', 'Хаб');
   await host.click('#createBtn');
-  await host.evaluate(() => window.__wfi.setHostMode('off')); // в песочнице без интернета
-  let offer = await waitQr(host, 'joinQr');
+  // хаб сначала пробует «Есть интернет» — дожидаемся, потом проверяем вход без интернета
+  await host.waitForFunction(() => window.__wfi.S.entered && !/Готовлю/.test(document.getElementById('joinHint').textContent), null, { timeout: 40000 });
+  await host.evaluate(() => window.__wfi.setHostMode('off'));
+  let offer = await qr(host, 'joinQr');
   while (!offer.includes('#o=')) { await host.waitForTimeout(200); offer = await qr(host, 'joinQr'); }
   await host.keyboard.press('Escape');
   console.log(`офлайн-QR: ссылка ${offer.length} символов`);
