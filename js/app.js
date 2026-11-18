@@ -4,7 +4,7 @@
   const BOOT = window.WFI_BOOT, AUDIO = window.WFI_AUDIO, STT = window.WFI_STT, LIC = window.WFI_LICENSE;
   const $ = (id) => document.getElementById(id);
   const DEFAULT_CH = ['Общий', 'Звук', 'Свет', 'Сцена', 'Режиссёр'];
-  const VER = '1.0.3'; // = VERSION в sw.js
+  const VER = '1.0.4'; // = VERSION в sw.js
   const ALL = '*';
   const EMOJI = '👍👌🙏✅❌⚠️🔥⏱️🎤🎧🔊🔇💡🎬📢🚪😀😂😅😎🤔😬🙄😴❤️👏🤝✋👀💪☕🍕🚀'.match(/\p{Extended_Pictographic}️?/gu);
   const rid = () => [...crypto.getRandomValues(new Uint8Array(5))].map((b) => b.toString(16).padStart(2, '0')).join('');
