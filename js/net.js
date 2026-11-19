@@ -135,6 +135,7 @@
       this.trialEnd = trialEnd; // null = лицензия
       this.members = new Map();
       this.links = new Map(); // id → send(m)
+      this.colors = new Map(); // id → цвет: вернувшийся участник получает свой цвет обратно
       this.n = 0;
     }
 
@@ -158,7 +159,8 @@
         case 'hello': {
           const info = { id, name: String(m.name || 'Без имени').slice(0, 24), role: String(m.role || '').slice(0, 16),
             listen: m.listen || [], talk: m.talk || '', talking: false,
-            color: me?.color || COLORS[this.n++ % COLORS.length] }; // повторный hello (переподключение) цвет не меняет
+            color: this.colors.get(id) || COLORS[this.n++ % COLORS.length] };
+          this.colors.set(id, info.color);
           this.members.set(id, info);
           this.to(id, { t: 'welcome', id, color: info.color });
           this.roster();

@@ -59,6 +59,21 @@ try {
   await A.evaluate(() => window.__wfi.sendHub({ t: 'chat', text: 'онлайн ок' }));
   await B.waitForFunction(() => document.getElementById('msgs').textContent.includes('онлайн ок'));
   console.log('чат — ок');
+
+  // обрыв связи у Васи: сторож сам переподключает без QR
+  await A.evaluate(() => window.__wfi.S.peers.get(window.__wfi.S.hostId).pc.close());
+  await A.waitForFunction(() => { const p = window.__wfi.S.peers.get(window.__wfi.S.hostId); return p && !p.closed && p.dc.readyState === 'open'; }, null, { timeout: 30000 });
+  await host.waitForFunction(() => window.__wfi.S.roster.length === 3, null, { timeout: 10000 });
+  console.log('обрыв у Васи → переподключился сам');
+
+  // Петя обновил страницу: «Вернуться в сессию» одной кнопкой, цвет тот же
+  const colorB = await host.evaluate(() => window.__wfi.S.roster.find((m) => m.name === 'Петя').color);
+  await B.reload();
+  await B.waitForFunction(() => document.getElementById('joinBtn').textContent === 'Вернуться в сессию' && !document.getElementById('joinBtn').hidden);
+  await B.click('#joinBtn');
+  await B.waitForSelector('#main:not([hidden])', { timeout: 30000 });
+  await host.waitForFunction((c) => window.__wfi.S.roster.length === 3 && window.__wfi.S.roster.find((m) => m.name === 'Петя')?.color === c, colorB, { timeout: 10000 });
+  console.log('Петя обновил страницу → вернулся одной кнопкой, цвет тот же');
   console.log('E2E ONLINE OK');
 } catch (e) {
   console.error('E2E ONLINE FAIL:', e.message);

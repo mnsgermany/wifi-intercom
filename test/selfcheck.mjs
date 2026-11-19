@@ -27,6 +27,9 @@ assert.equal(inbox.B.at(-1).members.length, 2);
 const colorA = inbox.A.find((m) => m.t === 'welcome').color;
 hub.onMessage('A', { t: 'hello', name: 'Вася', listen: ['Звук'], talk: 'Звук' }); // переподключился
 assert.equal(hub.members.get('A').color, colorA, 'цвет не меняется при повторном входе');
+hub.detach('A'); hub.attach('A', (m) => inbox.A.push(m));
+hub.onMessage('A', { t: 'hello', name: 'Вася', listen: ['Звук'], talk: 'Звук' }); // вернулся после обрыва
+assert.equal(hub.members.get('A').color, colorA, 'после обрыва цвет тот же');
 hub.onMessage('A', { t: 'relay', to: 'B', data: { desc: 1 } });
 assert.deepEqual(inbox.B.at(-1), { t: 'relay', from: 'A', data: { desc: 1 } });
 assert.ok(!inbox.H.some((m) => m.t === 'relay'));

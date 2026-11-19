@@ -4,7 +4,7 @@
   const BOOT = window.WFI_BOOT, CLOUD = window.WFI_CLOUD, AUDIO = window.WFI_AUDIO, STT = window.WFI_STT, LIC = window.WFI_LICENSE;
   const $ = (id) => document.getElementById(id);
   const DEFAULT_CH = ['Общий', 'Звук', 'Свет', 'Сцена', 'Режиссёр'];
-  const VER = '1.2.2'; // = VERSION в sw.js
+  const VER = '1.3.0'; // = VERSION в sw.js
   const ALL = '*';
   const EMOJI = '👍👌🙏✅❌⚠️🔥⏱️🎤🎧🔊🔇💡🎬📢🚪😀😂😅😎🤔😬🙄😴❤️👏🤝✋👀💪☕🍕🚀'.match(/\p{Extended_Pictographic}️?/gu);
   const rid = () => [...crypto.getRandomValues(new Uint8Array(5))].map((b) => b.toString(16).padStart(2, '0')).join('');
@@ -171,14 +171,21 @@
       onMsg: (m, p) => { if (S.host) S.hub.onMessage(p.id, m); else if (p.id === S.hostId) onHub(m); },
       onOpen: (p) => {
         if (S.host) S.hub.attach(p.id, (m) => p.send(m));
-        else if (p.id === S.hostId) { S.ws?.close(); S.ws = null; enterMain(); }
+        else if (p.id === S.hostId) {
+          S.ws?.close(); S.ws = null;
+          if (!S.entered) enterMain();
+          else { hello(); banner('Связь с хабом восстановлена ✓'); } // хаб забыл нас при обрыве — представляемся заново
+        }
         routeAudio();
       },
       onClose: (p) => {
         if (S.peers.get(p.id) === p) S.peers.delete(p.id);
         document.getElementById('a_' + p.id)?.remove();
         if (S.host) S.hub.detach(p.id);
-        else if (p.id === S.hostId && !S.over) banner('Хаб отключился — связи нет. Подойди ближе к Wi-Fi или войди заново.', true);
+        else if (p.id === S.hostId && !S.over) {
+          banner(S.join?.kind === 'on' ? 'Связь с хабом пропала — переподключаюсь…'
+            : 'Связь с хабом пропала. Без интернета вернуться можно только заново: отсканируй QR хаба.', true);
+        }
       },
     };
   }
@@ -288,15 +295,20 @@
   }
 
   // Хаб онлайн: через комнату приходит только рукопожатие, дальше всё по прямому каналу (или TURN).
+  // Как и без интернета, соединение всегда предлагает хаб: участник только «стучится».
   function onCloudHub(m) {
     const id = m.from;
-    if (m.t !== 'sig' || !m.desc || !/^[0-9a-f]{10}$/.test(id || '') || S.over) return;
+    if (!/^[0-9a-f]{10}$/.test(id || '') || S.over) return;
     let p = S.peers.get(id);
-    if (!p) {
-      p = new Peer(id, peerOpts(id, false, (desc) => S.ws.send({ t: 'sig', to: id, desc }), S.ice));
+    if (m.t === 'knock') {
+      if (p && !p.closed && Date.now() - p.born < 3000) return; // повтор того же стука
+      if (p) p.close(); // новый вход того же участника — старую связь заменяем
+      p = new Peer(id, peerOpts(id, true, (desc) => S.ws.send({ t: 'sig', to: id, desc }), S.ice));
+      p.born = Date.now();
       S.peers.set(id, p);
+    } else if (m.t === 'sig' && m.desc && p) {
+      p.signal(m.desc);
     }
-    p.signal(m.desc);
   }
 
   // Офлайн: хаб заранее готовит предложение для следующего входящего и показывает его в QR.
@@ -334,9 +346,41 @@
       if (h.get('c')) S.join = Object.assign({ kind: 'on' }, await BOOT.unpack(h.get('c')));
       else if (h.get('o')) S.join = Object.assign({ kind: 'off' }, await BOOT.unpack(h.get('o')));
     } catch { S.join = null; err('Ссылка входа повреждена — отсканируй QR ещё раз.'); }
+    const back = !S.join && savedRejoin();
+    if (back) { S.join = { kind: 'on', r: back.r, h: back.h }; S.id = back.id; } // тот же id — хаб узнает и вернёт цвет
+    $('joinBtn').textContent = back ? 'Вернуться в сессию' : 'Войти в сессию';
     $('joinBtn').hidden = !S.join;
     $('createBtn').classList.toggle('primary', !S.join);
-    if (S.join) $('startSub').textContent = 'Тебя пригласили в сессию. Введи имя и входи.';
+    if (S.join) $('startSub').textContent = back ? 'Ты был в сессии — нажми, чтобы вернуться.' : 'Тебя пригласили в сессию. Введи имя и входи.';
+  }
+
+  // Онлайн-участник после обновления/закрытия страницы возвращается одной кнопкой (12 ч).
+  const REJOIN = 'wfi_rejoin';
+  function savedRejoin() {
+    try { const r = JSON.parse(localStorage.getItem(REJOIN)); return r && Date.now() - r.ts < 12 * 3600e3 ? r : null; } catch { return null; }
+  }
+  const forgetRejoin = () => { try { localStorage.removeItem(REJOIN); } catch { /* приватный режим */ } };
+
+  // Связь с хабом через комнату; при обрыве сторож переподключает сам.
+  function connectHub() {
+    const old = S.peers.get(S.hostId);
+    if (old) { old.onClose = null; old.close(); S.peers.delete(S.hostId); }
+    S.ws?.close();
+    S.ws = CLOUD.room(String(S.join.r), S.id, (m) => {
+      if (m.from === S.hostId && m.t === 'sig' && m.desc) { step('Шаг 3/3: хаб ответил, соединяю…'); S.peers.get(S.hostId)?.signal(m.desc); }
+    });
+    const p = new Peer(S.hostId, peerOpts(S.hostId, false, (desc) => S.ws?.send({ t: 'sig', to: S.hostId, desc }), S.ice));
+    p.born = Date.now();
+    S.peers.set(S.hostId, p);
+    S.ws.send({ t: 'knock', to: S.hostId });
+    step('Шаг 2/3: постучался к хабу, жду ответ… (у хаба должен быть открыт QR «Есть интернет»)');
+  }
+
+  function watchHub() {
+    if (S.over || S.join?.kind !== 'on') return;
+    const p = S.peers.get(S.hostId);
+    const dead = !p || p.closed || p.pc.connectionState === 'failed' || (p.dc.readyState !== 'open' && Date.now() - p.born > 12000);
+    if (dead) connectHub();
   }
 
   async function joinSession() {
@@ -350,14 +394,9 @@
       try { S.ice = await CLOUD.ice(); } catch (e) {
         return step('Нет связи с сервером (' + e.message + '). Нужен интернет — или попроси хаб переключиться на «Без интернета».');
       }
-      S.ws = CLOUD.room(String(j.r), S.id, (m) => {
-        if (m.from === S.hostId && m.t === 'sig' && m.desc) { step('Шаг 3/3: хаб ответил, соединяю…'); S.peers.get(S.hostId)?.signal(m.desc); }
-      });
-      const p = new Peer(S.hostId, peerOpts(S.hostId, true, (desc) => {
-        S.ws?.send({ t: 'sig', to: S.hostId, desc });
-        step('Шаг 2/3: запрос отправлен, жду ответ хаба… (у хаба должен быть открыт QR «Есть интернет»)');
-      }, S.ice));
-      S.peers.set(S.hostId, p);
+      try { localStorage.setItem(REJOIN, JSON.stringify({ r: j.r, h: j.h, id: S.id, ts: Date.now() })); } catch { /* приватный режим */ }
+      connectHub();
+      setInterval(watchHub, 4000);
       setTimeout(() => { if (!S.entered) step($('startErr').textContent + '\n\nДолго нет связи. Проверь интернет у обоих телефонов.'); }, 25000);
     } else {
       const p = new Peer(S.hostId, peerOpts(S.hostId, false, async (desc) => {
@@ -402,6 +441,7 @@
   document.addEventListener('visibilitychange', async () => {
     if (document.visibilityState !== 'visible' || !S.entered || S.over) return;
     keepAwake();
+    watchHub();
     if (S.mic && !S.mic.alive()) { // iOS отбирает микрофон в фоне
       try { await startMic(); banner('Микрофон снова работает. Не сворачивай приложение во время шоу.'); } catch { banner('Микрофон отключён — разреши его снова.'); }
     }
@@ -690,6 +730,7 @@
   function finish(reason) {
     if (S.over) return;
     S.over = true;
+    forgetRejoin();
     setTalking(false);
     setTimeout(() => { for (const p of S.peers.values()) p.close(); S.pending?.close(); S.ws?.close(); S.mic?.stop(); }, 300);
     $('endTitle').textContent = reason === 'trial' ? 'Пробные 5 минут закончились' : 'Сессия закончилась';
@@ -718,6 +759,8 @@
     await readJoin();
   };
   window.addEventListener('hashchange', readJoin);
+  // хаб держит всю сессию: случайное обновление или закрытие оборвёт связь у всех
+  window.addEventListener('beforeunload', (e) => { if (S.host && S.entered && !S.over) { e.preventDefault(); e.returnValue = ''; } });
   readJoin();
 
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
