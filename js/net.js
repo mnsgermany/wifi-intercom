@@ -1,7 +1,7 @@
 // Сетка WebRTC: каждый с каждым напрямую по Wi-Fi. Канал данных 'ctl' + один аудио-трансивер.
 // Первое рукопожатие идёт через boot (брокер, QR или хаб), дальнейшие — по самому каналу данных.
 (function (root) {
-  // Без интернета: только локальные адреса, STUN/TURN тут не нужны и недоступны.
+  // ice: без интернета — пусто (только локальные адреса); с интернетом — STUN + ретранслятор TURN.
 
   /** Адреса из SDP для диагностики: «192.168.1.5 · abc.local · 85.1.2.3 (внешний)». */
   function addrs(sdp) {
@@ -26,21 +26,21 @@
   }
 
   class Peer {
-    constructor(id, { initiator, boot, onMsg, onTrack, onOpen, onClose, onState, slots = 0 }) {
+    constructor(id, { initiator, boot, onMsg, onTrack, onOpen, onClose, onState, slots = 0, ice = [] }) {
       Object.assign(this, { id, initiator, polite: !initiator, boot, onMsg, onTrack, onOpen, onClose, onState });
       this.making = false;
       this.closed = false;
       this.track = null; // что сейчас отдаём этому собеседнику (микрофон или null)
-      const pc = this.pc = new RTCPeerConnection({ iceServers: [] });
+      const pc = this.pc = new RTCPeerConnection({ iceServers: ice });
       pc.oniceconnectionstatechange = () => onState?.(this, pc.iceConnectionState);
       this.dc = pc.createDataChannel('ctl', { negotiated: true, id: 0 });
       this.dc.onopen = () => {
         if (initiator && !this.tx) {
           this.tx = pc.addTransceiver('audio', { direction: 'sendrecv' });
           this.tx.sender.replaceTrack(this.track).catch(() => {});
-          // «звезда»: хаб пересылает слушателю до slots говорящих одновременно, без микширования
-          this.slots = Array.from({ length: slots }, () => pc.addTransceiver('audio', { direction: 'sendonly' }));
         }
+        // «звезда»: хаб пересылает слушателю до slots говорящих одновременно, без микширования
+        if (slots && !this.slots) this.slots = Array.from({ length: slots }, () => pc.addTransceiver('audio', { direction: 'sendonly' }));
         onOpen?.(this);
       };
       this.dc.onmessage = (e) => {
@@ -157,7 +157,7 @@
       switch (m.t) {
         case 'hello': {
           const info = { id, name: String(m.name || 'Без имени').slice(0, 24), role: String(m.role || '').slice(0, 16),
-            listen: m.listen || [], talk: m.talk || '', talking: false, sfu: String(m.sfu || '').slice(0, 80),
+            listen: m.listen || [], talk: m.talk || '', talking: false,
             color: me?.color || COLORS[this.n++ % COLORS.length] }; // повторный hello (переподключение) цвет не меняет
           this.members.set(id, info);
           this.to(id, { t: 'welcome', id, color: info.color });
@@ -166,7 +166,7 @@
         }
         case 'update':
           if (!me) return;
-          for (const k of ['name', 'role', 'listen', 'talk', 'sfu']) if (k in m) me[k] = m[k];
+          for (const k of ['name', 'role', 'listen', 'talk']) if (k in m) me[k] = m[k];
           this.roster();
           break;
         case 'relay':

@@ -1,15 +1,12 @@
-// Облачный посредник Wi-Fi Intercom (Cloudflare Worker, бесплатный план).
-//  /sfu/...      → прокси к Cloudflare Realtime SFU: секрет приложения живёт только здесь.
-//  /room/<имя>   → WebSocket-комната (Durable Object): служебные сообщения хаба (кто в эфире, чат, текст).
-// Звук идёт через SFU, через комнату — только короткие JSON.
-
-const SFU = 'https://rtc.live.cloudflare.com/v1/apps/';
-const ALLOWED = /^sessions\/new$|^sessions\/[\w-]{8,64}\/(tracks\/new|tracks\/close|renegotiate)$/;
+// Посредник Wi-Fi Intercom (Cloudflare Workers, бесплатный план, без карты).
+//  /room/<имя>  → WebSocket-комната (Durable Object): телефоны обмениваются рукопожатием с хабом.
+//  /ice         → STUN + TURN для обхода сетей; логин TURN — в секретах Worker (TURN_URLS, TURN_USER, TURN_PASS).
+// Звук через Worker не идёт.
 const ORIGINS = ['https://mnsgermany.github.io', 'http://localhost:8751'];
 
 const cors = (origin) => ({
   'Access-Control-Allow-Origin': ORIGINS.includes(origin) ? origin : ORIGINS[0],
-  'Access-Control-Allow-Methods': 'POST, PUT, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
   'Access-Control-Max-Age': '86400',
 });
@@ -19,7 +16,7 @@ export default {
     const url = new URL(req.url);
     const origin = req.headers.get('Origin') || '';
     if (req.method === 'OPTIONS') return new Response(null, { headers: cors(origin) });
-    // shortcut: проверка Origin отсекает чужие сайты, но не скрипты вне браузера — лимит трафика 1000 ГБ это переживёт
+    // shortcut: проверка Origin отсекает чужие сайты, но не скрипты вне браузера; логин TURN всё равно виден браузеру
     if (origin && !ORIGINS.includes(origin)) return new Response('forbidden', { status: 403 });
 
     const room = url.pathname.match(/^\/room\/([a-z0-9]{8,64})$/);
@@ -28,16 +25,12 @@ export default {
       return env.ROOM.get(env.ROOM.idFromName(room[1])).fetch(req);
     }
 
-    const sfu = url.pathname.match(/^\/sfu\/(.+)$/);
-    if (sfu && ALLOWED.test(sfu[1]) && (req.method === 'POST' || req.method === 'PUT')) {
-      const body = req.method === 'POST' && sfu[1] === 'sessions/new' ? undefined : await req.text();
-      if (body && body.length > 200000) return new Response('too big', { status: 413, headers: cors(origin) });
-      const r = await fetch(SFU + env.SFU_APP_ID + '/' + sfu[1], {
-        method: req.method,
-        headers: { Authorization: 'Bearer ' + env.SFU_APP_SECRET, 'Content-Type': 'application/json' },
-        body,
-      });
-      return new Response(r.body, { status: r.status, headers: { ...cors(origin), 'Content-Type': 'application/json' } });
+    if (url.pathname === '/ice' && req.method === 'GET') {
+      const list = [{ urls: 'stun:stun.cloudflare.com:3478' }];
+      if (env.TURN_URLS && env.TURN_USER) {
+        list.push({ urls: env.TURN_URLS.split(',').map((u) => u.trim()), username: env.TURN_USER, credential: env.TURN_PASS });
+      }
+      return new Response(JSON.stringify(list), { headers: { ...cors(origin), 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
     }
     return new Response('not found', { status: 404, headers: cors(origin) });
   },

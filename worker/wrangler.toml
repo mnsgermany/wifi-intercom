@@ -2,7 +2,7 @@ name = "wifi-intercom"
 main = "index.js"
 compatibility_date = "2026-11-01"
 
-# SFU_APP_ID и SFU_APP_SECRET — секреты (npx wrangler secret put ...), в файлы не пишем.
+# TURN_URLS, TURN_USER, TURN_PASS — секреты (npx wrangler secret put ...), в файлы не пишем.
 
 [[durable_objects.bindings]]
 name = "ROOM"

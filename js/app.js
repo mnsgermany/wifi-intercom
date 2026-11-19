@@ -4,7 +4,7 @@
   const BOOT = window.WFI_BOOT, CLOUD = window.WFI_CLOUD, AUDIO = window.WFI_AUDIO, STT = window.WFI_STT, LIC = window.WFI_LICENSE;
   const $ = (id) => document.getElementById(id);
   const DEFAULT_CH = ['Общий', 'Звук', 'Свет', 'Сцена', 'Режиссёр'];
-  const VER = '1.1.0'; // = VERSION в sw.js
+  const VER = '1.2.0'; // = VERSION в sw.js
   const ALL = '*';
   const EMOJI = '👍👌🙏✅❌⚠️🔥⏱️🎤🎧🔊🔇💡🎬📢🚪😀😂😅😎🤔😬🙄😴❤️👏🤝✋👀💪☕🍕🚀'.match(/\p{Extended_Pictographic}️?/gu);
   const rid = () => [...crypto.getRandomValues(new Uint8Array(5))].map((b) => b.toString(16).padStart(2, '0')).join('');
@@ -21,7 +21,7 @@
   // ---------- состояние ----------
   const S = {
     id: rid(), host: false, hub: null, hostId: null, peers: new Map(), roster: [], channels: DEFAULT_CH,
-    mic: null, talking: false, sfu: null, ws: null, pulled: new Map(), cloudTracks: new Map(), pttDown: false, trialEnd: null, mq: null, room: null, pending: null,
+    mic: null, talking: false, ws: null, ice: [], pttDown: false, trialEnd: null, mq: null, room: null, pending: null,
     hostMode: 'on', join: null, stt: null, sttStopT: 0, over: false, licEmail: null,
   };
   const me = () => S.roster.find((m) => m.id === S.id);
@@ -87,15 +87,14 @@
     if (prefs.mode === 'vad') setTalking(voice && !S.vadMuted);
   }
 
-  // Звук. Облако: микрофон уходит в SFU, только пока говорю; чужие голоса глушим по каналам.
-  // Без интернета — «звезда»: участник шлёт хабу, хаб раскладывает говорящих по 3 слотам каждого слушателя.
+  // Звук — «звезда»: участник шлёт микрофон хабу, только пока говорит; хаб раскладывает говорящих
+  // по 3 слотам каждого слушателя с учётом его каналов. Сам хаб глушит у себя чужие каналы.
   const hears = (L, sp) => !!L && !!sp && L.id !== sp.id && (sp.talk === ALL || L.listen.includes(sp.talk));
-  const trackOf = (id) => (id === S.id ? S.mic?.track : S.peers.get(id)?.remote || S.cloudTracks.get(id)) || null;
+  const trackOf = (id) => (id === S.id ? S.mic?.track : S.peers.get(id)?.remote) || null;
 
   function routeAudio() {
     const my = me();
     const mic = S.talking ? S.mic?.track ?? null : null;
-    S.sfu?.setTrack(mic).catch(() => {});
     if (!S.host) S.peers.get(S.hostId)?.setTrack(mic);
     for (const el of $('remote').children) { // a_<id> — голос конкретного человека; a_slotN — уже отобран хабом
       const id = el.id.slice(2);
@@ -138,7 +137,6 @@
   // ---------- связь с хабом ----------
   function sendHub(m) {
     if (S.host) S.hub?.onMessage(S.id, m);
-    else if (S.ws) S.ws.send(Object.assign({}, m, { to: S.hostId }));
     else S.peers.get(S.hostId)?.send(m);
   }
 
@@ -166,14 +164,14 @@
     }
   }
 
-  function peerOpts(id, initiator, boot) {
+  function peerOpts(id, initiator, boot, ice = []) {
     return {
-      initiator, boot, onState, slots: S.host ? 3 : 0,
+      initiator, boot, onState, ice, slots: S.host ? 3 : 0,
       onTrack: (track, p, slot) => playRemote(track, slot == null ? p : { id: 'slot' + slot }),
       onMsg: (m, p) => { if (S.host) S.hub.onMessage(p.id, m); else if (p.id === S.hostId) onHub(m); },
       onOpen: (p) => {
         if (S.host) S.hub.attach(p.id, (m) => p.send(m));
-        else if (p.id === S.hostId) enterMain();
+        else if (p.id === S.hostId) { S.ws?.close(); S.ws = null; enterMain(); }
         routeAudio();
       },
       onClose: (p) => {
@@ -185,34 +183,6 @@
     };
   }
 
-  // Облако: забираем голоса новых участников, отпускаем ушедших. Неудачные — повтор раз в 5 с.
-  function pullCloud() {
-    if (!S.sfu) return;
-    for (const [id] of S.pulled) {
-      if (S.roster.some((m) => m.id === id)) continue;
-      S.pulled.delete(id); S.cloudTracks.delete(id);
-      S.sfu.drop(id).catch(() => {});
-      document.getElementById('a_' + id)?.remove();
-    }
-    const want = S.roster.filter((m) => m.id !== S.id && m.sfu && S.pulled.get(m.id) !== m.sfu);
-    if (!want.length) return;
-    want.forEach((m) => S.pulled.set(m.id, m.sfu));
-    const forget = (m) => S.pulled.get(m.id) === m.sfu && S.pulled.delete(m.id);
-    S.sfu.pull(want.map((m) => ({ id: m.id, session: m.sfu })))
-      .then((ok) => ok.forEach((v, i) => !v && forget(want[i])), () => want.forEach(forget));
-  }
-
-  async function startCloudAudio() {
-    S.sfu = await CLOUD.sfu((track, id) => {
-      if (!id) return;
-      S.cloudTracks.set(id, track);
-      playRemote(track, { id });
-      routeAudio();
-    }, (st) => { if (st === 'failed' || st === 'disconnected') banner('Связь с облаком: ' + (ICE_RU[st] || st)); });
-    routeAudio();
-    S.sfu.connected.then(() => { sendHub({ t: 'update', sfu: S.sfu.sessionId }); pullCloud(); }, (e) => banner(e.message, true));
-    setInterval(pullCloud, 5000);
-  }
 
   function onHub(m) {
     switch (m.t) {
@@ -220,7 +190,6 @@
         break;
       case 'roster': {
         S.roster = m.members; S.channels = m.channels; S.hostId = m.host; S.trialEnd = m.trialEnd;
-        pullCloud();
         for (const [id, p] of S.peers) if (!S.roster.some((x) => x.id === id) && !(S.host && id === S.pending?.id)) p.close();
         const my = me();
         if (my) { // каналы могли переименовать — чиним свой выбор
@@ -259,7 +228,7 @@
 
   function hello() {
     const listen = (prefs.listen || DEFAULT_CH).filter((c) => S.channels.includes(c));
-    sendHub({ t: 'hello', name: prefs.name, role: prefs.role, sfu: S.sfu?.sessionId || '', listen: listen.length ? listen : [S.channels[0]],
+    sendHub({ t: 'hello', name: prefs.name, role: prefs.role, listen: listen.length ? listen : [S.channels[0]],
       talk: prefs.talk && (prefs.talk === ALL || S.channels.includes(prefs.talk)) ? prefs.talk : S.channels[0] });
   }
 
@@ -290,15 +259,15 @@
       try {
         if (!S.ws) {
           if (!CLOUD.configured) throw new Error('облако не настроено');
-          if (!S.sfu) await startCloudAudio();
-          S.roomName = rid() + rid(); // имя комнаты в облаке знают только те, у кого QR
+          S.ice = await CLOUD.ice();
+          S.roomName = rid() + rid(); // имя комнаты знают только те, у кого QR
           S.ws = CLOUD.room(S.roomName, S.id, onCloudHub);
           S.onlineUrl = base() + '#c=' + (await BOOT.pack({ r: S.roomName, h: S.id }));
         }
         if (S.hostMode !== 'on') return; // пока ждали брокер, переключили на «без интернета»
         S.joinUrl = S.onlineUrl;
         drawQr($('joinQr'), S.joinUrl);
-        $('joinHint').textContent = 'Наведи камеру телефона на QR → откроется ссылка → «Войти в сессию». Звук идёт через облако: работает в любой сети, где есть интернет.';
+        $('joinHint').textContent = 'Наведи камеру телефона на QR → откроется ссылка → «Войти в сессию». Нужен интернет; если напрямую не соединится, голос пойдёт через ретранслятор.';
       } catch {
         if (S.hostMode !== 'on') return;
         $('joinHint').textContent = (CLOUD.configured ? 'Нет связи с облаком' : 'Облачный режим ещё не подключён') + ' — переключаю на вход без интернета.';
@@ -318,13 +287,16 @@
     $('joinHint').textContent = '1) Входящий наводит камеру на этот QR. 2) Он покажет свой QR — нажми «Сканировать ответ».';
   }
 
-  // Хаб в облаке: сообщения участников приходят через комнату, ответы уходят адресно.
+  // Хаб онлайн: через комнату приходит только рукопожатие, дальше всё по прямому каналу (или TURN).
   function onCloudHub(m) {
     const id = m.from;
-    if (!/^[0-9a-f]{10}$/.test(id || '') || S.over) return;
-    if (m.t === 'left') return S.hub.detach(id);
-    if (!S.hub.links.has(id)) S.hub.attach(id, (x) => S.ws.send(Object.assign({}, x, { to: id })));
-    S.hub.onMessage(id, m);
+    if (m.t !== 'sig' || !m.desc || !/^[0-9a-f]{10}$/.test(id || '') || S.over) return;
+    let p = S.peers.get(id);
+    if (!p) {
+      p = new Peer(id, peerOpts(id, false, (desc) => S.ws.send({ t: 'sig', to: id, desc }), S.ice));
+      S.peers.set(id, p);
+    }
+    p.signal(m.desc);
   }
 
   // Офлайн: хаб заранее готовит предложение для следующего входящего и показывает его в QR.
@@ -374,20 +346,19 @@
     S.hostId = String(j.h);
     history.replaceState(null, '', base());
     if (j.kind === 'on') {
-      step('Шаг 1/2: подключаюсь к облаку…');
-      try { await startCloudAudio(); } catch (e) {
-        return step('Не получилось выйти в облако (' + e.message + '). Нужен интернет — или попроси хаб переключиться на «Без интернета».');
+      step('Шаг 1/3: выхожу на сервер связи…');
+      try { S.ice = await CLOUD.ice(); } catch (e) {
+        return step('Нет связи с сервером (' + e.message + '). Нужен интернет — или попроси хаб переключиться на «Без интернета».');
       }
       S.ws = CLOUD.room(String(j.r), S.id, (m) => {
-        if (m.from !== S.hostId) return;
-        if (m.t === 'left') { if (!S.over) banner('Хаб вышел из сети — ждём, пока вернётся.', true); return; }
-        enterMain();
-        onHub(m);
-      }, (st) => { if (st === 'open' && S.entered) hello(); }); // после обрыва представляемся заново
-      step('Шаг 2/2: облако есть ✓, жду ответ хаба…');
-      const knock = setInterval(() => (S.entered || S.over ? clearInterval(knock) : hello()), 2000);
-      hello();
-      setTimeout(() => { if (!S.entered) step('Хаб не отвечает. Проверь, что у хаба открыт QR «Есть интернет» и у него есть интернет.'); }, 25000);
+        if (m.from === S.hostId && m.t === 'sig' && m.desc) { step('Шаг 3/3: хаб ответил, соединяю…'); S.peers.get(S.hostId)?.signal(m.desc); }
+      });
+      const p = new Peer(S.hostId, peerOpts(S.hostId, true, (desc) => {
+        S.ws?.send({ t: 'sig', to: S.hostId, desc });
+        step('Шаг 2/3: запрос отправлен, жду ответ хаба… (у хаба должен быть открыт QR «Есть интернет»)');
+      }, S.ice));
+      S.peers.set(S.hostId, p);
+      setTimeout(() => { if (!S.entered) step($('startErr').textContent + '\n\nДолго нет связи. Проверь интернет у обоих телефонов.'); }, 25000);
     } else {
       const p = new Peer(S.hostId, peerOpts(S.hostId, false, async (desc) => {
         drawQr($('answerQr'), 'WFIA:' + (await BOOT.pack({ pid: S.id, d: BOOT.slim(desc) })));
@@ -720,7 +691,7 @@
     if (S.over) return;
     S.over = true;
     setTalking(false);
-    setTimeout(() => { for (const p of S.peers.values()) p.close(); S.pending?.close(); S.ws?.close(); S.sfu?.close(); S.mic?.stop(); }, 300);
+    setTimeout(() => { for (const p of S.peers.values()) p.close(); S.pending?.close(); S.ws?.close(); S.mic?.stop(); }, 300);
     $('endTitle').textContent = reason === 'trial' ? 'Пробные 5 минут закончились' : 'Сессия закончилась';
     $('endTxt').textContent = reason === 'trial'
       ? (S.host ? 'Чтобы говорить без ограничений, активируй хаб. Можно начать новую пробную сессию.' : 'Хаб работает в пробном режиме. Попроси его активировать ключ или начни заново.')
