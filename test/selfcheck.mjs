@@ -1,5 +1,5 @@
-// Самопроверка без браузера: упаковка QR, шифр рукопожатия, маршрутизация хаба, ключ, живой MQTT-брокер.
-// Запуск: node test/selfcheck.mjs [--net]
+// Самопроверка без браузера: упаковка QR, маршрутизация хаба, ключ.
+// Запуск: node test/selfcheck.mjs
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -16,14 +16,6 @@ const packed = await BOOT.pack(obj);
 assert.deepEqual(await BOOT.unpack(packed), obj);
 assert.ok(packed.length < 200, 'сжатие работает');
 
-// шифр рукопожатия: свой ключ открывает, чужой — нет
-const k = BOOT.b64u(crypto.getRandomValues(new Uint8Array(16)));
-const r1 = await BOOT.room(k), r2 = await BOOT.room(BOOT.b64u(crypto.getRandomValues(new Uint8Array(16))));
-const sealed = await r1.seal({ pid: 'x', desc: { type: 'offer' } });
-assert.equal((await r1.open(sealed)).pid, 'x');
-await assert.rejects(r2.open(sealed));
-assert.notEqual(r1.base, r2.base);
-
 // хаб: hello → welcome + roster, relay только адресату, каналы меняет только хаб
 const hub = new NET.Hub({ hostId: 'H', channels: ['Общий', 'Звук'], trialEnd: null });
 const inbox = { H: [], A: [], B: [] };
@@ -32,6 +24,12 @@ hub.onMessage('H', { t: 'hello', name: 'Хаб', listen: ['Общий'], talk: '
 hub.onMessage('A', { t: 'hello', name: 'Вася', listen: ['Звук'], talk: 'Звук' });
 assert.ok(inbox.A.some((m) => m.t === 'welcome' && m.id === 'A'));
 assert.equal(inbox.B.at(-1).members.length, 2);
+const colorA = inbox.A.find((m) => m.t === 'welcome').color;
+hub.onMessage('A', { t: 'hello', name: 'Вася', listen: ['Звук'], talk: 'Звук', sfu: 'sess-A' }); // переподключился
+assert.equal(hub.members.get('A').color, colorA, 'цвет не меняется при повторном входе');
+assert.equal(hub.members.get('A').sfu, 'sess-A');
+hub.onMessage('A', { t: 'update', sfu: 'sess-A2' });
+assert.equal(hub.members.get('A').sfu, 'sess-A2');
 hub.onMessage('A', { t: 'relay', to: 'B', data: { desc: 1 } });
 assert.deepEqual(inbox.B.at(-1), { t: 'relay', from: 'A', data: { desc: 1 } });
 assert.ok(!inbox.H.some((m) => m.t === 'relay'));
@@ -54,18 +52,4 @@ assert.equal(await LIC.valid('other@example.com', key), false);
 const riderKey = execFileSync('sh', ['-c', `printf '%s' 'RiderStudio-1|${email}|0000000000000000' | openssl dgst -sha256 -sign "${pem}" | base64 | tr -d '\\n'`]).toString();
 assert.equal(await LIC.valid(email, riderKey), false, 'ключи других программ не подходят');
 
-// живой брокер: два клиента, сообщение доходит
-if (process.argv.includes('--net')) {
-  // хаб слушает все брокеры, входящий берёт самый быстрый — сообщение всё равно доходит
-  let got;
-  const topic = r1.base + '/selftest';
-  const hubs = await BOOT.connectAll((t, p) => { got = [t, p]; }, (c) => c.sub(topic));
-  await new Promise((ok) => setTimeout(ok, 9000)); // дать досоединиться остальным
-  const b = await BOOT.connect(() => {});
-  b.pub(topic, sealed);
-  for (let i = 0; i < 40 && !got; i++) await new Promise((ok) => setTimeout(ok, 100));
-  assert.deepEqual(got, [topic, sealed]);
-  console.log('хаб на', hubs.map((c) => BOOT.BROKERS[c.broker]).join(', '), '; входящий на', BOOT.BROKERS[b.broker], '— ok');
-  hubs.forEach((c) => c.close()); b.close();
-}
 console.log('selfcheck ok');

@@ -49,22 +49,26 @@ try {
   }
   const [A, B] = users, all = [host, A, B];
 
-  // все видят троих и соединены каждый с каждым (A↔B — напрямую, без хаба)
-  for (const p of all) await p.waitForFunction(() => window.__wfi.S.roster.length === 3 && [...window.__wfi.S.peers.values()].filter((x) => x.pc.connectionState === 'connected').length === 2, null, { timeout: 20000 });
-  console.log('сетка 3×3 соединена');
+  // «звезда»: у каждого участника одна связь — с хабом, у хаба — по одной с каждым
+  await host.waitForFunction(() => window.__wfi.S.roster.length === 3 && [...window.__wfi.S.peers.values()].filter((x) => x.pc.connectionState === 'connected').length === 2, null, { timeout: 20000 });
+  for (const p of [A, B]) await p.waitForFunction(() => window.__wfi.S.roster.length === 3 && window.__wfi.S.peers.size === 1 && window.__wfi.S.peers.get(window.__wfi.S.hostId).pc.connectionState === 'connected', null, { timeout: 20000 });
+  console.log('звезда: хаб ↔ 2 участника соединены');
 
-  const bytesFrom = (p, id) => p.evaluate(async (id) => {
+  const inBytes = (p) => p.evaluate(async () => {
+    let b = 0; (await window.__wfi.S.peers.get(window.__wfi.S.hostId).pc.getStats()).forEach((s) => { if (s.type === 'inbound-rtp' && s.kind === 'audio') b += s.bytesReceived; }); return b;
+  });
+  const hostIn = (id) => host.evaluate(async (id) => {
     let b = 0; (await window.__wfi.S.peers.get(id).pc.getStats()).forEach((s) => { if (s.type === 'inbound-rtp' && s.kind === 'audio') b += s.bytesReceived; }); return b;
   }, id);
   const idA = await A.evaluate(() => window.__wfi.S.id);
 
-  // A говорит в «Общий» — слышат все
-  const b0 = await bytesFrom(B, idA), h0 = await bytesFrom(host, idA);
+  // A говорит в «Общий»: хаб слышит его и пересылает Пете через слот
+  const b0 = await inBytes(B), h0 = await hostIn(idA);
   await A.evaluate(() => window.__wfi.setTalking(true));
-  await A.waitForTimeout(2000);
-  const b1 = await bytesFrom(B, idA), h1 = await bytesFrom(host, idA);
-  assert.ok(b1 - b0 > 4000 && h1 - h0 > 4000, `звук идёт: B +${b1 - b0} Б, хаб +${h1 - h0} Б`);
-  console.log(`звук A→B напрямую +${b1 - b0} Б за 2 с, A→хаб +${h1 - h0} Б`);
+  await A.waitForTimeout(2500);
+  const b1 = await inBytes(B), h1 = await hostIn(idA);
+  assert.ok(h1 - h0 > 4000 && b1 - b0 > 4000, `звук идёт: хаб +${h1 - h0} Б, Петя через хаб +${b1 - b0} Б`);
+  console.log(`звук A→хаб +${h1 - h0} Б, хаб→Петя (пересылка) +${b1 - b0} Б за 2,5 с`);
   await B.evaluate(() => window.__wfi.S.roster.find((m) => m.talking)?.name).then((n) => assert.equal(n, 'Вася'));
 
   if (SHOTS) {
@@ -76,7 +80,7 @@ try {
   await A.evaluate(() => window.__wfi.setTalking(false));
 
   // задержка по статистике WebRTC
-  const lat = await B.evaluate(async (id) => window.__wfi.S.peers.get(id).stats(), idA);
+  const lat = await B.evaluate(async () => window.__wfi.S.peers.get(window.__wfi.S.hostId).stats());
   console.log(`RTT ${lat.rtt?.toFixed(1)} мс, джиттер-буфер ${lat.jb?.toFixed(1)} мс → рот-ухо ≈ ${Math.round(lat.rtt / 2 + lat.jb + 40)} мс`);
 
   // текст с именем, чат, вызов
@@ -96,9 +100,10 @@ try {
   await B.evaluate(() => window.__wfi.sendHub({ t: 'update', listen: ['Звук'] }));
   await A.waitForFunction(() => window.__wfi.S.roster.find((m) => m.name === 'Петя').listen.join() === 'Звук');
   await A.evaluate(() => window.__wfi.setTalking(true));
-  const idB = await B.evaluate(() => window.__wfi.S.id), idH = await host.evaluate(() => window.__wfi.S.id);
-  const tracks = await A.evaluate(([b, h]) => [window.__wfi.S.peers.get(b).track, window.__wfi.S.peers.get(h).track].map(Boolean), [idB, idH]);
-  assert.deepEqual(tracks, [false, true], 'Петя не слышит «Общий», хаб слышит');
+  const idB = await B.evaluate(() => window.__wfi.S.id);
+  await host.waitForFunction((a) => window.__wfi.S.roster.find((m) => m.id === a)?.talking, idA);
+  const slotB = await host.evaluate((b) => window.__wfi.S.peers.get(b).slots.map((s) => !!s.sender.track), idB);
+  assert.deepEqual(slotB, [false, false, false], 'Петя не слушает «Общий» — хаб ему Васю не шлёт');
   await A.evaluate(() => window.__wfi.setTalking(false));
   console.log('маршрутизация по каналам — ок');
 

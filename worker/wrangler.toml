@@ -1,0 +1,13 @@
+name = "wifi-intercom"
+main = "index.js"
+compatibility_date = "2026-11-01"
+
+# SFU_APP_ID и SFU_APP_SECRET — секреты (npx wrangler secret put ...), в файлы не пишем.
+
+[[durable_objects.bindings]]
+name = "ROOM"
+class_name = "Room"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room"]

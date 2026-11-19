@@ -1,9 +1,7 @@
 // Сетка WebRTC: каждый с каждым напрямую по Wi-Fi. Канал данных 'ctl' + один аудио-трансивер.
 // Первое рукопожатие идёт через boot (брокер, QR или хаб), дальнейшие — по самому каналу данных.
 (function (root) {
-  // Без интернета — только локальные адреса. С интернетом добавляем бесплатный STUN: если телефоны прячут
-  // свои адреса за *.local и сеть не пропускает их поиск, остаётся путь через внешний адрес роутера.
-  const STUN = [{ urls: 'stun:stun.l.google.com:19302' }];
+  // Без интернета: только локальные адреса, STUN/TURN тут не нужны и недоступны.
 
   /** Адреса из SDP для диагностики: «192.168.1.5 · abc.local · 85.1.2.3 (внешний)». */
   function addrs(sdp) {
@@ -28,18 +26,20 @@
   }
 
   class Peer {
-    constructor(id, { initiator, boot, onMsg, onTrack, onOpen, onClose, onState, online }) {
+    constructor(id, { initiator, boot, onMsg, onTrack, onOpen, onClose, onState, slots = 0 }) {
       Object.assign(this, { id, initiator, polite: !initiator, boot, onMsg, onTrack, onOpen, onClose, onState });
       this.making = false;
       this.closed = false;
       this.track = null; // что сейчас отдаём этому собеседнику (микрофон или null)
-      const pc = this.pc = new RTCPeerConnection({ iceServers: online ? STUN : [] });
+      const pc = this.pc = new RTCPeerConnection({ iceServers: [] });
       pc.oniceconnectionstatechange = () => onState?.(this, pc.iceConnectionState);
       this.dc = pc.createDataChannel('ctl', { negotiated: true, id: 0 });
       this.dc.onopen = () => {
         if (initiator && !this.tx) {
           this.tx = pc.addTransceiver('audio', { direction: 'sendrecv' });
           this.tx.sender.replaceTrack(this.track).catch(() => {});
+          // «звезда»: хаб пересылает слушателю до slots говорящих одновременно, без микширования
+          this.slots = Array.from({ length: slots }, () => pc.addTransceiver('audio', { direction: 'sendonly' }));
         }
         onOpen?.(this);
       };
@@ -52,10 +52,15 @@
         if (pc.connectionState === 'failed' || pc.connectionState === 'closed') this.close();
       };
       pc.ontrack = (e) => {
+        try { e.receiver.jitterBufferTarget = 0; } catch { /* Safari без поддержки */ }
+        if (this.tx && this.tx !== e.transceiver) { // слот хаба: уже отобранный голос
+          this.nSlot = (this.nSlot || 0) + 1;
+          return onTrack?.(e.track, this, this.nSlot - 1);
+        }
         // ответчик тоже хочет говорить: направление ставим до ответа, перепереговоров не будет
         if (e.transceiver.direction !== 'sendrecv') e.transceiver.direction = 'sendrecv';
         this.tx = e.transceiver;
-        try { e.receiver.jitterBufferTarget = 0; } catch { /* Safari без поддержки */ }
+        this.remote = e.track;
         this.tx.sender.replaceTrack(this.track).catch(() => {});
         onTrack?.(e.track, this);
       };
@@ -152,7 +157,8 @@
       switch (m.t) {
         case 'hello': {
           const info = { id, name: String(m.name || 'Без имени').slice(0, 24), role: String(m.role || '').slice(0, 16),
-            listen: m.listen || [], talk: m.talk || '', talking: false, color: COLORS[this.n++ % COLORS.length] };
+            listen: m.listen || [], talk: m.talk || '', talking: false, sfu: String(m.sfu || '').slice(0, 80),
+            color: me?.color || COLORS[this.n++ % COLORS.length] }; // повторный hello (переподключение) цвет не меняет
           this.members.set(id, info);
           this.to(id, { t: 'welcome', id, color: info.color });
           this.roster();
@@ -160,7 +166,7 @@
         }
         case 'update':
           if (!me) return;
-          for (const k of ['name', 'role', 'listen', 'talk']) if (k in m) me[k] = m[k];
+          for (const k of ['name', 'role', 'listen', 'talk', 'sfu']) if (k in m) me[k] = m[k];
           this.roster();
           break;
         case 'relay':

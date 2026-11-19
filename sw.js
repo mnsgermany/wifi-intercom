@@ -1,8 +1,8 @@
 // Офлайн: один раз открыл с интернетом — дальше приложение грузится из кэша.
-const VERSION = 'wfi-1.0.4';
+const VERSION = 'wfi-1.1.0';
 const FILES = [
   './', 'index.html', 'style.css', 'manifest.json', 'icon.svg', 'icon-180.png', 'icon-512.png',
-  'js/app.js', 'js/boot.js', 'js/net.js', 'js/audio.js', 'js/stt.js', 'js/license.js', 'js/proc-worklet.js',
+  'js/app.js', 'js/boot.js', 'js/net.js', 'js/cloud.js', 'js/audio.js', 'js/stt.js', 'js/license.js', 'js/proc-worklet.js',
   'vendor/qrcode.js', 'vendor/jsQR.js', 'vendor/rnnoise.wasm',
 ];
 
