@@ -36,7 +36,10 @@ try {
     await u.fill('#name', name);
     const t = Date.now();
     await u.click('#joinBtn');
-    await u.waitForSelector('#main:not([hidden])', { timeout: 30000 });
+    await u.waitForSelector('#main:not([hidden])', { timeout: 30000 }).catch(async (e) => {
+      console.log(name, 'шаги:', await u.evaluate(() => (window.__wfi.S.log || []).join(' | ')));
+      throw e;
+    });
     console.log(name, 'в эфире за', Date.now() - t, 'мс');
     users.push(u);
   }

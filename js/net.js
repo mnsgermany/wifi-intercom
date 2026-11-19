@@ -18,7 +18,7 @@
   function gathered(pc) {
     if (pc.iceGatheringState === 'complete') return Promise.resolve();
     return new Promise((ok) => {
-      const t = setTimeout(ok, 5000);
+      const t = setTimeout(ok, 3000); // ждать «complete» дольше незачем: битые адреса STUN/TURN тянут его до таймаута
       pc.addEventListener('icegatheringstatechange', () => {
         if (pc.iceGatheringState === 'complete') { clearTimeout(t); ok(); }
       });
