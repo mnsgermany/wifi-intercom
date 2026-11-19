@@ -2,7 +2,7 @@
 // бесплатно, без карты), звук идёт телефон ↔ хаб напрямую или через ретранслятор TURN (ExpressTURN).
 (function (root) {
   // на localhost автотест подставляет локальный Worker (wrangler dev)
-  const API = (root.location?.hostname === 'localhost' && root.localStorage?.getItem('wfi_api')) || 'https://wifi-intercom.WORKERS_SUBDOMAIN.workers.dev';
+  const API = (root.location?.hostname === 'localhost' && root.localStorage?.getItem('wfi_api')) || 'https://wifi-intercom.mns-vocal.workers.dev';
 
   /** Комната с автопереподключением. onMsg(m) — входящие, onState('open'|'closed'). */
   function room(name, id, onMsg, onState) {
@@ -31,5 +31,5 @@
     return r.json();
   }
 
-  root.WFI_CLOUD = { room, ice, configured: !API.includes('WORKERS_SUBDOMAIN') };
+  root.WFI_CLOUD = { room, ice, configured: true };
 })(typeof window !== 'undefined' ? window : globalThis);
